@@ -3,6 +3,11 @@ name: Boutique CI Pipeline
 on:
   workflow_dispatch:
 
+# Only one run at a time, so two runs never push to main together
+concurrency:
+  group: boutique-ci
+  cancel-in-progress: false
+
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
   IMAGE_TAG: ${{ github.sha }}
@@ -12,6 +17,7 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
+      fail-fast: false   # one failing service no longer cancels the others
       matrix:
         service:
           - auth
@@ -91,6 +97,19 @@ jobs:
           git config user.name "Yaathvik2020"
           git config user.email "chinnayaathvik@gmail.com"
           git add gitops/k8s/
-          git diff --staged --quiet || git commit -m "ci: update image tags to ${{ github.sha }}"
-          git pull --rebase origin ${{ github.ref_name }}
-          git push
+
+          if git diff --staged --quiet; then
+            echo "No manifest changes to commit"
+            exit 0
+          fi
+
+          git commit -m "ci: update image tags to ${{ github.sha }}"
+
+          for i in 1 2 3; do
+            git pull --rebase -X theirs origin ${{ github.ref_name }} && git push && exit 0
+            echo "Push failed, retrying ($i/3)..."
+            sleep 5
+          done
+
+          echo "Push failed after 3 attempts"
+          exit 1
